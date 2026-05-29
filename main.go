@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 func main() {
@@ -39,15 +40,23 @@ func main() {
 	}
 	defer conn.Close()
 
-	req := request{Payload: payload}
-	var res response
+	deadline := time.Now().Add(15 * time.Minute) // fixed
+	req := InvokeRequest{
+		Payload: payload,
+		Deadline: InvokeRequest_Timestamp{
+			Seconds: deadline.Unix(),
+			Nanos:   int64(deadline.Nanosecond()),
+		},
+	}
+
+	var res InvokeResponse
 	if err := conn.Call("Function.Invoke", &req, &res); err != nil {
-		errprintln(fmt.Sprintf("invokation error: %s", err.Error()))
+		errprintln(fmt.Sprintf("invocation error: %s", err.Error()))
 		os.Exit(1)
 	}
 
 	if res.Error != nil {
-		errprintln(res.Error.Message)
+		errprintln(res.Error.Error())
 		os.Exit(1)
 	}
 
@@ -58,15 +67,42 @@ func errprintln(message string) {
 	fmt.Fprintln(os.Stderr, message)
 }
 
-type request struct {
-	Payload []byte
+// see: https://github.com/aws/aws-lambda-go/blob/main/lambda/messages/messages.go
+
+type InvokeRequest_Timestamp struct {
+	Seconds int64
+	Nanos   int64
 }
 
-type response struct {
-	Payload []byte
-	Error   *responseError
+type InvokeRequest struct {
+	Payload               []byte
+	RequestId             string
+	XAmznTraceId          string
+	Deadline              InvokeRequest_Timestamp
+	InvokedFunctionArn    string
+	CognitoIdentityId     string
+	CognitoIdentityPoolId string
+	ClientContext         []byte
 }
 
-type responseError struct {
-	Message string `json:"errorMessage"`
+type InvokeResponse struct {
+	Payload []byte
+	Error   *InvokeResponse_Error
+}
+
+type InvokeResponse_Error struct {
+	Message    string                             `json:"errorMessage"`
+	Type       string                             `json:"errorType"`
+	StackTrace []*InvokeResponse_Error_StackFrame `json:"stackTrace,omitempty"`
+	ShouldExit bool                               `json:"-"`
+}
+
+func (e InvokeResponse_Error) Error() string {
+	return fmt.Sprintf("%#v", e)
+}
+
+type InvokeResponse_Error_StackFrame struct {
+	Path  string `json:"path"`
+	Line  int32  `json:"line"`
+	Label string `json:"label"`
 }
